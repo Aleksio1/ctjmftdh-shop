@@ -1,16 +1,80 @@
-Routes (src/routes/)
+# 🛒 E-commerce App
 
-__root.tsx — layout global (Header/Footer)
-index.tsx — catalogue avec filtres
-produits.$slug.tsx — fiche produit
-panier.tsx — panier
-auth.tsx — connexion / inscription
-_authenticated/checkout.tsx — paiement
-_authenticated/commande.$id.tsx — confirmation
-_authenticated/compte.tsx — historique commandes
-Logique (src/lib/)
+Application e-commerce développée avec **React**, **TanStack Router** et un backend sécurisé.
 
-cart.ts — hook panier (localStorage)
-products.functions.ts — catalogue (server functions)
-orders.functions.ts — commandes (protégées)
-Backend : tables profiles, products, orders, order_items avec RLS, produits seedés.
+## 📁 Structure des routes
+
+```
+src/
+└── routes/
+    ├── __root.tsx                     # Layout global (Header / Footer)
+    ├── index.tsx                      # Catalogue avec filtres
+    ├── produits.$slug.tsx             # Fiche produit
+    ├── panier.tsx                     # Panier
+    ├── auth.tsx                       # Connexion / Inscription
+    └── _authenticated/
+        ├── checkout.tsx               # Paiement
+        ├── commande.$id.tsx           # Confirmation de commande
+        └── compte.tsx                 # Historique des commandes
+```
+
+## 📦 Logique métier
+
+```
+src/
+└── lib/
+    ├── cart.ts                # Gestion du panier (localStorage)
+    ├── products.functions.ts  # Fonctions serveur pour le catalogue
+    └── orders.functions.ts    # Fonctions serveur protégées pour les commandes
+```
+
+## 🗄️ Backend
+
+### Tables
+
+- `profiles`
+- `products`
+- `orders`
+- `order_items`
+
+### Sécurité
+
+- ✅ Row Level Security (RLS) activée
+- ✅ Accès protégé aux commandes
+- ✅ Produits pré-remplis (seed)
+
+## ✨ Fonctionnalités
+
+- Catalogue de produits
+- Recherche et filtres
+- Fiche produit dynamique
+- Panier persistant (localStorage)
+- Authentification utilisateur
+- Paiement sécurisé
+- Confirmation de commande
+- Historique des commandes
+- Backend sécurisé avec RLS
+
+## 🛠️ Stack technique
+
+- React
+- TanStack Router
+- TypeScript
+- Supabase
+- Server Functions
+
+## 🚀 Installation
+
+```bash
+git clone https://github.com/votre-utilisateur/votre-repo.git
+
+cd votre-repo
+
+npm install
+
+npm run dev
+```
+
+## 📄 Licence
+
+Projet réalisé à des fins d'apprentissage et de démonstration.
