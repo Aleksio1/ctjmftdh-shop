@@ -1,80 +1,1337 @@
-# 🛒 E-commerce App
 
-Application e-commerce développée avec **React**, **TanStack Router** et un backend sécurisé.
+-- PROFILES
+CREATE TABLE public.profiles (
+  id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT, UPDATE ON public.profiles TO authenticated;
+GRANT ALL ON public.profiles TO service_role;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own profile read" ON public.profiles FOR SELECT TO authenticated USING (auth.uid() = id);
+CREATE POLICY "own profile insert" ON public.profiles FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+CREATE POLICY "own profile update" ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
 
-## 📁 Structure des routes
+-- Auto-create profile on signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name)
+  VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', ''));
+  RETURN NEW;
+END; $$;
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
-```
-src/
-└── routes/
-    ├── __root.tsx                     # Layout global (Header / Footer)
-    ├── index.tsx                      # Catalogue avec filtres
-    ├── produits.$slug.tsx             # Fiche produit
-    ├── panier.tsx                     # Panier
-    ├── auth.tsx                       # Connexion / Inscription
-    └── _authenticated/
-        ├── checkout.tsx               # Paiement
-        ├── commande.$id.tsx           # Confirmation de commande
-        └── compte.tsx                 # Historique des commandes
-```
+-- PRODUCTS
+CREATE TABLE public.products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  name text NOT NULL,
+  description text NOT NULL,
+  category text NOT NULL, -- 't-shirt' | 'pull' | 'veste'
+  price_cents integer NOT NULL CHECK (price_cents >= 0),
+  image_url text NOT NULL,
+  sizes text[] NOT NULL DEFAULT ARRAY['S','M','L','XL'],
+  in_stock boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON public.products TO anon, authenticated;
+GRANT ALL ON public.products TO service_role;
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "products public read" ON public.products FOR SELECT TO anon, authenticated USING (true);
 
-## 📦 Logique métier
+-- ORDERS
+CREATE TABLE public.orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  total_cents integer NOT NULL,
+  status text NOT NULL DEFAULT 'paid', -- paid | shipped | delivered | cancelled
+  shipping_name text NOT NULL,
+  shipping_address text NOT NULL,
+  shipping_city text NOT NULL,
+  shipping_zip text NOT NULL,
+  shipping_country text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT ON public.orders TO authenticated;
+GRANT ALL ON public.orders TO service_role;
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own orders read" ON public.orders FOR SELECT TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "own orders insert" ON public.orders FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
 
-```
-src/
-└── lib/
-    ├── cart.ts                # Gestion du panier (localStorage)
-    ├── products.functions.ts  # Fonctions serveur pour le catalogue
-    └── orders.functions.ts    # Fonctions serveur protégées pour les commandes
-```
+-- ORDER ITEMS
+CREATE TABLE public.order_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES public.products(id),
+  product_name text NOT NULL,
+  product_image text NOT NULL,
+  size text NOT NULL,
+  quantity integer NOT NULL CHECK (quantity > 0),
+  unit_price_cents integer NOT NULL
+);
+GRANT SELECT, INSERT ON public.order_items TO authenticated;
+GRANT ALL ON public.order_items TO service_role;
+ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own order items read" ON public.order_items FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.orders o WHERE o.id = order_id AND o.user_id = auth.uid()));
+CREATE POLICY "own order items insert" ON public.order_items FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM public.orders o WHERE o.id = order_id AND o.user_id = auth.uid()));
 
-## 🗄️ Backend
-
-### Tables
-
-- `profiles`
-- `products`
-- `orders`
-- `order_items`
-
-### Sécurité
-
-- ✅ Row Level Security (RLS) activée
-- ✅ Accès protégé aux commandes
-- ✅ Produits pré-remplis (seed)
-
-## ✨ Fonctionnalités
-
-- Catalogue de produits
-- Recherche et filtres
-- Fiche produit dynamique
-- Panier persistant (localStorage)
-- Authentification utilisateur
-- Paiement sécurisé
-- Confirmation de commande
-- Historique des commandes
-- Backend sécurisé avec RLS
-
-## 🛠️ Stack technique
-
-- React
-- TanStack Router
-- TypeScript
-- Supabase
-- Server Functions
-
-## 🚀 Installation
-
-```bash
-git clone https://github.com/votre-utilisateur/votre-repo.git
-
-cd votre-repo
-
-npm install
-
-npm run dev
-```
-
-## 📄 Licence
-
-Projet réalisé à des fins d'apprentissage et de démonstration.
+-- Seed products
+INSERT INTO public.products (slug, name, description, category, price_cents, image_url) VALUES
+('tee-noir-essential', 'Tee Noir Essential', 'T-shirt oversize en coton bio 240g. Coupe droite, col renforcé. Un classique intemporel du vestiaire streetwear.', 't-shirt', 3500, 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800&q=80'),
+('tee-blanc-graphic', 'Tee Blanc Graphic', 'T-shirt manches courtes en coton peigné avec impression sérigraphique dorsale. Fit régulier.', 't-shirt', 3900, 'https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?w=800&q=80'),
+('tee-vintage-wash', 'Tee Vintage Wash', 'Délavage pigmentaire à la main. Toucher doux, aspect porté authentique. 100% coton.', 't-shirt', 4500, 'https://images.unsplash.com/photo-1622470953794-aa9c70b0fb9d?w=800&q=80'),
+('pull-heavy-crewneck', 'Pull Heavy Crewneck', 'Sweat col rond en molleton lourd 480g. Épaules tombantes, poignets côtelés. Confort maximal.', 'pull', 7900, 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?w=800&q=80'),
+('pull-hoodie-oversize', 'Hoodie Oversize', 'Hoodie oversize en coton bio brossé. Capuche doublée, poche kangourou, cordons plats.', 'pull', 8900, 'https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=800&q=80'),
+('pull-quart-zip-terracotta', 'Quart-Zip Terracotta', 'Sweat quart-zip couleur terracotta. Col haut, matière bouclette premium.', 'pull', 9500, 'https://images.unsplash.com/photo-1620012253295-c15cc3e65df4?w=800&q=80'),
+('veste-bomber-noire', 'Bomber Noir', 'Veste bomber en satin technique. Doublure matelassée, poignets et col en bord-côte.', 'veste', 14900, 'https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=800&q=80'),
+('veste-workwear-carhartt', 'Veste Workwear', 'Veste ouvrière en toile de coton résistante. Multi-poches, coupe utilitaire.', 'veste', 16500, 'https://images.unsplash.com/photo-1544022613-e87ca75a784a?w=800&q=80'),
+('veste-parka-technique', 'Parka Technique', 'Parka longue coupe-vent avec capuche amovible. Membrane imperméable, coutures étanches.', 'veste', 22900, 'https://images.unsplash.com/photo-1548883354-94bcfe321cbb?w=800&q=80');
+REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM anon, authenticated, public;
+src/styles.css
+@custom-variant dark (&:is(.dark *));
+/*
+ * Design system definition.
+ *
+ * The @theme inline block maps CSS custom properties to Tailwind utility
+ * classes (e.g. --color-primary -> bg-primary, text-primary).
+ *
+ * The :root and .dark blocks define the actual color values using oklch.
+ * All colors MUST use oklch format.
+ *
+ * To add a new semantic color:
+ * 1. Add the variable to :root (light value) and .dark (dark value)
+ * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-display: "Bebas Neue", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.129 0.042 264.695);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.129 0.042 264.695);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.129 0.042 264.695);
+  --primary: oklch(0.208 0.042 265.755);
+  --primary-foreground: oklch(0.984 0.003 247.858);
+  --secondary: oklch(0.968 0.007 247.896);
+  --secondary-foreground: oklch(0.208 0.042 265.755);
+  --muted: oklch(0.968 0.007 247.896);
+  --muted-foreground: oklch(0.554 0.046 257.417);
+  --accent: oklch(0.968 0.007 247.896);
+  --accent-foreground: oklch(0.208 0.042 265.755);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(0.929 0.013 255.508);
+  --input: oklch(0.929 0.013 255.508);
+  --ring: oklch(0.704 0.04 256.788);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.984 0.003 247.858);
+  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-primary: oklch(0.208 0.042 265.755);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-ring: oklch(0.704 0.04 256.788);
+}
+.dark {
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --card: oklch(0.208 0.042 265.755);
+  --card-foreground: oklch(0.984 0.003 247.858);
+  --popover: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.929 0.013 255.508);
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary: oklch(0.279 0.041 260.031);
+  --secondary-foreground: oklch(0.984 0.003 247.858);
+  --muted: oklch(0.279 0.041 260.031);
+  --muted-foreground: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.279 0.041 260.031);
+  --accent-foreground: oklch(0.984 0.003 247.858);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.551 0.027 264.364);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --radius: 0.5rem;
+  --background: oklch(0.14 0.005 240);
+  --foreground: oklch(0.97 0.005 240);
+  --card: oklch(0.18 0.008 240);
+  --card-foreground: oklch(0.97 0.005 240);
+  --popover: oklch(0.18 0.008 240);
+  --popover-foreground: oklch(0.97 0.005 240);
+  --primary: oklch(0.85 0.15 75);
+  --primary-foreground: oklch(0.14 0.005 240);
+  --secondary: oklch(0.24 0.01 240);
+  --secondary-foreground: oklch(0.97 0.005 240);
+  --muted: oklch(0.22 0.008 240);
+  --muted-foreground: oklch(0.65 0.01 240);
+  --accent: oklch(0.28 0.02 240);
+  --accent-foreground: oklch(0.97 0.005 240);
+  --destructive: oklch(0.62 0.22 25);
+  --destructive-foreground: oklch(0.97 0.005 240);
+  --border: oklch(0.28 0.01 240);
+  --input: oklch(0.24 0.008 240);
+  --ring: oklch(0.85 0.15 75);
+}
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+  html, body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: 0.02em;
+  }
+}
+src/lib/cart.ts
+import { useEffect, useState, useCallback } from "react";
+export type CartItem = {
+  productId: string;
+  slug: string;
+  name: string;
+  image: string;
+  size: string;
+  priceCents: number;
+  quantity: number;
+};
+const KEY = "cart:v1";
+const EVT = "cart:changed";
+function read(): CartItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function write(items: CartItem[]) {
+  localStorage.setItem(KEY, JSON.stringify(items));
+  window.dispatchEvent(new Event(EVT));
+}
+export function useCart() {
+  const [items, setItems] = useState<CartItem[]>([]);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    setItems(read());
+    setHydrated(true);
+    const onChange = () => setItems(read());
+    window.addEventListener(EVT, onChange);
+    window.addEventListener("storage", onChange);
+    return () => {
+      window.removeEventListener(EVT, onChange);
+      window.removeEventListener("storage", onChange);
+    };
+  }, []);
+  const add = useCallback((item: Omit<CartItem, "quantity">, qty = 1) => {
+    const current = read();
+    const idx = current.findIndex(
+      (i) => i.productId === item.productId && i.size === item.size,
+    );
+    if (idx >= 0) current[idx].quantity += qty;
+    else current.push({ ...item, quantity: qty });
+    write(current);
+  }, []);
+  const remove = useCallback((productId: string, size: string) => {
+    write(read().filter((i) => !(i.productId === productId && i.size === size)));
+  }, []);
+  const setQty = useCallback((productId: string, size: string, qty: number) => {
+    const current = read();
+    const idx = current.findIndex((i) => i.productId === productId && i.size === size);
+    if (idx < 0) return;
+    if (qty <= 0) current.splice(idx, 1);
+    else current[idx].quantity = qty;
+    write(current);
+  }, []);
+  const clear = useCallback(() => write([]), []);
+  const count = items.reduce((n, i) => n + i.quantity, 0);
+  const totalCents = items.reduce((n, i) => n + i.priceCents * i.quantity, 0);
+  return { items, hydrated, add, remove, setQty, clear, count, totalCents };
+}
+export function formatPrice(cents: number) {
+  return (cents / 100).toLocaleString("fr-FR", {
+    style: "currency",
+    currency: "EUR",
+  });
+}
+src/lib/products.functions.ts
+import { createServerFn } from "@tanstack/react-start";
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
+function serverClient() {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY!;
+  return createClient<Database>(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, storage: undefined },
+    global: {
+      fetch: (input, init) => {
+        const h = new Headers(init?.headers);
+        if (key.startsWith("sb_") && h.get("Authorization") === `Bearer ${key}`) {
+          h.delete("Authorization");
+        }
+        h.set("apikey", key);
+        return fetch(input, { ...init, headers: h });
+      },
+    },
+  });
+}
+export const listProducts = createServerFn({ method: "GET" }).handler(async () => {
+  const sb = serverClient();
+  const { data, error } = await sb
+    .from("products")
+    .select("id, slug, name, description, category, price_cents, image_url, sizes, in_stock")
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+});
+export const getProduct = createServerFn({ method: "GET" })
+  .inputValidator((d: { slug: string }) => d)
+  .handler(async ({ data }) => {
+    const sb = serverClient();
+    const { data: p, error } = await sb
+      .from("products")
+      .select("id, slug, name, description, category, price_cents, image_url, sizes, in_stock")
+      .eq("slug", data.slug)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return p;
+  });
+      src/lib/orders.functions.ts
+import { createServerFn } from "@tanstack/react-start";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { z } from "zod";
+const ItemSchema = z.object({
+  productId: z.string().uuid(),
+  size: z.string().min(1).max(10),
+  quantity: z.number().int().positive().max(20),
+});
+const InputSchema = z.object({
+  shipping_name: z.string().min(1).max(120),
+  shipping_address: z.string().min(1).max(240),
+  shipping_city: z.string().min(1).max(120),
+  shipping_zip: z.string().min(1).max(20),
+  shipping_country: z.string().min(1).max(80),
+  items: z.array(ItemSchema).min(1).max(50),
+});
+export const placeOrder = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => InputSchema.parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    // Load products (server-trusted pricing)
+    const ids = data.items.map((i) => i.productId);
+    const { data: products, error: pErr } = await supabase
+      .from("products")
+      .select("id, name, image_url, price_cents, in_stock")
+      .in("id", ids);
+    if (pErr) throw new Error(pErr.message);
+    const map = new Map(products?.map((p) => [p.id, p]) ?? []);
+    let total = 0;
+    for (const it of data.items) {
+      const p = map.get(it.productId);
+      if (!p || !p.in_stock) throw new Error("Un produit du panier n'est plus disponible");
+      total += p.price_cents * it.quantity;
+    }
+    const { data: order, error: oErr } = await supabase
+      .from("orders")
+      .insert({
+        user_id: userId,
+        total_cents: total,
+        status: "paid",
+        shipping_name: data.shipping_name,
+        shipping_address: data.shipping_address,
+        shipping_city: data.shipping_city,
+        shipping_zip: data.shipping_zip,
+        shipping_country: data.shipping_country,
+      })
+      .select("id")
+      .single();
+    if (oErr) throw new Error(oErr.message);
+    const rows = data.items.map((it) => {
+      const p = map.get(it.productId)!;
+      return {
+        order_id: order.id,
+        product_id: it.productId,
+        product_name: p.name,
+        product_image: p.image_url,
+        size: it.size,
+        quantity: it.quantity,
+        unit_price_cents: p.price_cents,
+      };
+    });
+    const { error: iErr } = await supabase.from("order_items").insert(rows);
+    if (iErr) throw new Error(iErr.message);
+    return { orderId: order.id };
+  });
+export const listMyOrders = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data, error } = await context.supabase
+      .from("orders")
+      .select("id, total_cents, status, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
+export const getMyOrder = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { id: string }) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { data: order, error } = await context.supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return order;
+  });
+      src/components/Header.tsx
+import { Link } from "@tanstack/react-router";
+import { ShoppingBag, User } from "lucide-react";
+import { useCart } from "@/lib/cart";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+export function Header() {
+  const { count, hydrated } = useCart();
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setSignedIn(!!data.user));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSignedIn(!!s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+  return (
+    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+        <Link to="/" className="font-display text-2xl tracking-widest">
+          NORDVEST
+        </Link>
+        <nav className="hidden gap-8 text-sm uppercase tracking-wider md:flex">
+          <Link to="/" activeOptions={{ exact: true }} className="hover:text-primary [&.active]:text-primary" activeProps={{ className: "active" }}>
+            Boutique
+          </Link>
+          <Link to="/" search={{ cat: "t-shirt" }} className="hover:text-primary">T-shirts</Link>
+          <Link to="/" search={{ cat: "pull" }} className="hover:text-primary">Pulls</Link>
+          <Link to="/" search={{ cat: "veste" }} className="hover:text-primary">Vestes</Link>
+        </nav>
+        <div className="flex items-center gap-4">
+          <Link
+            to={signedIn ? "/compte" : "/auth"}
+            className="flex items-center gap-2 text-sm hover:text-primary"
+            aria-label="Compte"
+          >
+            <User className="h-5 w-5" />
+            <span className="hidden md:inline">{signedIn ? "Compte" : "Connexion"}</span>
+          </Link>
+          <Link to="/panier" className="relative flex items-center gap-2 hover:text-primary" aria-label="Panier">
+            <ShoppingBag className="h-5 w-5" />
+            {hydrated && count > 0 && (
+              <span className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                {count}
+              </span>
+            )}
+          </Link>
+        </div>
+      </div>
+    </header>
+  );
+}
+export function Footer() {
+  return (
+    <footer className="mt-24 border-t border-border">
+      <div className="mx-auto max-w-7xl px-6 py-12 text-sm text-muted-foreground">
+        <div className="grid gap-8 md:grid-cols-3">
+          <div>
+            <div className="font-display text-xl tracking-widest text-foreground">NORDVEST</div>
+            <p className="mt-2">Vestiaire streetwear taillé pour la ville.</p>
+          </div>
+          <div>
+            <div className="mb-2 font-semibold uppercase tracking-wider text-foreground">Aide</div>
+            <ul className="space-y-1">
+              <li>Livraison sous 3-5 jours</li>
+              <li>Retour gratuit sous 30j</li>
+              <li>contact@nordvest.shop</li>
+            </ul>
+          </div>
+          <div>
+            <div className="mb-2 font-semibold uppercase tracking-wider text-foreground">Paiement</div>
+            <p>Paiement sécurisé — mode démonstration</p>
+          </div>
+        </div>
+        <div className="mt-8 border-t border-border pt-4 text-xs">© {new Date().getFullYear()} NORDVEST</div>
+      </div>
+    </footer>
+  );
+}
+src/routes/__root.tsx
+import appCss from "../styles.css?url";
+import { reportLovableError } from "../lib/lovable-error-reporting";
+import { Header, Footer } from "@/components/Header";
+import { supabase } from "@/integrations/supabase/client";
+import { Toaster } from "sonner";
+function NotFoundComponent() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="max-w-md text-center">
+        <h1 className="text-7xl font-bold text-foreground">404</h1>
+        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The page you're looking for doesn't exist or has been moved.
+        </p>
+        <div className="mt-6">
+    <div className="flex min-h-screen flex-col">
+      <Header />
+      <div className="flex flex-1 items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <h1 className="font-display text-7xl">404</h1>
+          <h2 className="mt-4 text-xl">Page introuvable</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Cette page n'existe pas ou a été déplacée.
+          </p>
+          <Link
+            to="/"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            className="mt-6 inline-flex rounded-md bg-primary px-4 py-2 text-sm font-semibold uppercase tracking-wider text-primary-foreground hover:opacity-90"
+          >
+            Go home
+            Retour boutique
+          </Link>
+        </div>
+      </div>
+  useEffect(() => {
+    reportLovableError(error, { boundary: "tanstack_root_error_component" });
+  }, [error]);
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="max-w-md text-center">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          This page didn't load
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Something went wrong on our end. You can try refreshing or head back home.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <h1 className="font-display text-3xl">Une erreur est survenue</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Essayez de rafraîchir la page.</p>
+        <div className="mt-6 flex justify-center gap-2">
+          <button
+            onClick={() => {
+              router.invalidate();
+              reset();
+            }}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            onClick={() => { router.invalidate(); reset(); }}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+          >
+            Try again
+            Réessayer
+          </button>
+          <a
+            href="/"
+            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            Go home
+          </a>
+          <a href="/" className="rounded-md border border-border px-4 py-2 text-sm">Accueil</a>
+        </div>
+      </div>
+    </div>
+    meta: [
+      { charSet: "utf-8" },
+      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { title: "Lovable App" },
+      { name: "description", content: "Lovable Generated Project" },
+      { name: "author", content: "Lovable" },
+      { property: "og:title", content: "Lovable App" },
+      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "NORDVEST — Boutique streetwear" },
+      { name: "description", content: "T-shirts, pulls et vestes streetwear. Livraison rapide, retour gratuit." },
+      { property: "og:title", content: "NORDVEST — Boutique streetwear" },
+      { property: "og:description", content: "T-shirts, pulls et vestes streetwear." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:site", content: "@Lovable" },
+    ],
+    links: [
+      {
+        rel: "stylesheet",
+        href: appCss,
+      },
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "" },
+      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap" },
+    ],
+  }),
+  shellComponent: RootShell,
+function RootShell({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+    <html lang="fr">
+      <head>
+        <HeadContent />
+      </head>
+function RootComponent() {
+  const { queryClient } = Route.useRouteContext();
+  const router = useRouter();
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
+        router.invalidate();
+        if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [router, queryClient]);
+  return (
+    <QueryClientProvider client={queryClient}>
+      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+      <Outlet />
+      <div className="flex min-h-screen flex-col">
+        <Header />
+        <main className="flex-1">
+          <Outlet />
+        </main>
+        <Footer />
+      </div>
+      <Toaster theme="dark" position="top-center" />
+    </QueryClientProvider>
+  );
+}
+          src/routes/index.tsx
+import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import { listProducts } from "@/lib/products.functions";
+import { formatPrice } from "@/lib/cart";
+// No head() here: the home route inherits title/description/og/twitter from
+// __root.tsx, and ships no og:image so serve-time hosting can inject the
+// project's social preview (explicit og:image or latest screenshot).
+const searchSchema = z.object({ cat: z.enum(["t-shirt", "pull", "veste"]).optional() });
+export const Route = createFileRoute("/")({
+  component: Index,
+  validateSearch: searchSchema,
+  head: () => ({
+    meta: [
+      { title: "NORDVEST — T-shirts, pulls, vestes streetwear" },
+      { name: "description", content: "Découvrez la collection : t-shirts, pulls et vestes streetwear premium." },
+      { property: "og:title", content: "NORDVEST — Boutique streetwear" },
+      { property: "og:description", content: "T-shirts, pulls et vestes streetwear premium." },
+    ],
+  }),
+  component: Home,
+});
+// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
+function Index() {
+const CAT_LABEL: Record<string, string> = {
+  "t-shirt": "T-shirts",
+  pull: "Pulls & Hoodies",
+  veste: "Vestes",
+};
+function Home() {
+  const { cat } = Route.useSearch();
+  const fn = useServerFn(listProducts);
+  const { data, isLoading } = useQuery({ queryKey: ["products"], queryFn: () => fn() });
+  const filtered = (data ?? []).filter((p) => (cat ? p.category === cat : true));
+  return (
+    <div
+      className="flex min-h-screen items-center justify-center"
+      style={{ backgroundColor: "#fcfbf8" }}
+    >
+      <img
+        data-lovable-blank-page-placeholder="REMOVE_THIS"
+        src="https://cdn.gpteng.co/blank-app-v1.svg"
+        alt="Your app will live here!"
+      />
+    <div>
+      {/* HERO */}
+      <section className="relative overflow-hidden border-b border-border">
+        <div className="mx-auto grid max-w-7xl gap-8 px-6 py-20 md:grid-cols-2 md:py-32">
+          <div className="flex flex-col justify-center">
+            <span className="text-xs uppercase tracking-[0.3em] text-primary">Collection Hiver 26</span>
+            <h1 className="mt-4 font-display text-6xl leading-none md:text-8xl">
+              Taillé<br />pour la ville.
+            </h1>
+            <p className="mt-6 max-w-md text-muted-foreground">
+              Matières lourdes, coupes affûtées. Le vestiaire streetwear signé NORDVEST.
+            </p>
+            <div className="mt-8 flex gap-3">
+              <Link
+                to="/"
+                search={{ cat: "veste" }}
+                className="rounded-md bg-primary px-6 py-3 text-sm font-semibold uppercase tracking-wider text-primary-foreground hover:opacity-90"
+              >
+                Voir les vestes
+              </Link>
+              <a
+                href="#catalogue"
+                className="rounded-md border border-border px-6 py-3 text-sm font-semibold uppercase tracking-wider hover:bg-accent"
+              >
+                Toute la collection
+              </a>
+            </div>
+          </div>
+          <div className="relative aspect-[4/5] overflow-hidden rounded-lg">
+            <img
+              src="https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1200&q=80"
+              alt="Modèle NORDVEST"
+              className="h-full w-full object-cover"
+            />
+          </div>
+        </div>
+      </section>
+      {/* CATALOGUE */}
+      <section id="catalogue" className="mx-auto max-w-7xl px-6 py-16">
+        <div className="mb-10 flex items-end justify-between">
+          <h2 className="font-display text-4xl md:text-5xl">
+            {cat ? CAT_LABEL[cat] : "Toute la collection"}
+          </h2>
+          <div className="flex gap-2 text-xs uppercase tracking-wider">
+            <Link to="/" activeOptions={{ exact: true }} search={{}} className="rounded-full border border-border px-3 py-1 hover:bg-accent [&.active]:bg-primary [&.active]:text-primary-foreground [&.active]:border-primary" activeProps={{ className: "active" }}>Tous</Link>
+            {(["t-shirt","pull","veste"] as const).map((c) => (
+              <Link key={c} to="/" search={{ cat: c }} className="rounded-full border border-border px-3 py-1 hover:bg-accent [&.active]:bg-primary [&.active]:text-primary-foreground [&.active]:border-primary" activeProps={{ className: "active" }}>
+                {CAT_LABEL[c]}
+              </Link>
+            ))}
+          </div>
+        </div>
+        {isLoading && <div className="text-muted-foreground">Chargement…</div>}
+        <div className="grid grid-cols-2 gap-6 md:grid-cols-3 lg:grid-cols-4">
+          {filtered.map((p) => (
+            <Link
+              key={p.id}
+              to="/produits/$slug"
+              params={{ slug: p.slug }}
+              className="group block"
+            >
+              <div className="aspect-[3/4] overflow-hidden rounded-lg bg-card">
+                <img
+                  src={p.image_url}
+                  alt={p.name}
+                  loading="lazy"
+                  className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                />
+              </div>
+              <div className="mt-3 flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    {CAT_LABEL[p.category] ?? p.category}
+                  </div>
+                  <div className="mt-1 font-semibold">{p.name}</div>
+                </div>
+                <div className="text-sm font-semibold text-primary">{formatPrice(p.price_cents)}</div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+        src/routes/produits.$slug.tsx
+import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
+import { toast } from "sonner";
+import { getProduct } from "@/lib/products.functions";
+import { formatPrice, useCart } from "@/lib/cart";
+export const Route = createFileRoute("/produits/$slug")({
+  head: ({ params }) => ({
+    meta: [
+      { title: `${params.slug} — NORDVEST` },
+      { name: "description", content: "Détail du produit NORDVEST." },
+    ],
+  }),
+  component: ProductDetail,
+});
+function ProductDetail() {
+  const { slug } = Route.useParams();
+  const fn = useServerFn(getProduct);
+  const { data: product, isLoading } = useQuery({
+    queryKey: ["product", slug],
+    queryFn: () => fn({ data: { slug } }),
+  });
+  const { add } = useCart();
+  const navigate = useNavigate();
+  const [size, setSize] = useState<string>("");
+  if (isLoading) return <div className="mx-auto max-w-7xl px-6 py-16 text-muted-foreground">Chargement…</div>;
+  if (!product) throw notFound();
+  return (
+    <div className="mx-auto max-w-7xl px-6 py-12">
+      <Link to="/" className="text-xs uppercase tracking-wider text-muted-foreground hover:text-primary">
+        ← Retour
+      </Link>
+      <div className="mt-6 grid gap-10 md:grid-cols-2">
+        <div className="aspect-[3/4] overflow-hidden rounded-lg bg-card">
+          <img src={product.image_url} alt={product.name} className="h-full w-full object-cover" />
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-[0.3em] text-primary">{product.category}</div>
+          <h1 className="mt-2 font-display text-5xl">{product.name}</h1>
+          <div className="mt-4 text-2xl font-semibold">{formatPrice(product.price_cents)}</div>
+          <p className="mt-6 leading-relaxed text-muted-foreground">{product.description}</p>
+          <div className="mt-8">
+            <div className="mb-3 text-xs uppercase tracking-wider">Taille</div>
+            <div className="flex gap-2">
+              {product.sizes.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSize(s)}
+                  className={`h-11 w-11 rounded-md border text-sm font-semibold transition ${
+                    size === s
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:border-foreground"
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            disabled={!product.in_stock}
+            onClick={() => {
+              if (!size) return toast.error("Choisissez une taille");
+              add({
+                productId: product.id,
+                slug: product.slug,
+                name: product.name,
+                image: product.image_url,
+                size,
+                priceCents: product.price_cents,
+              });
+              toast.success("Ajouté au panier");
+            }}
+            className="mt-8 w-full rounded-md bg-primary py-4 text-sm font-bold uppercase tracking-widest text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {product.in_stock ? "Ajouter au panier" : "Épuisé"}
+          </button>
+          <button
+            onClick={() => {
+              if (!size) return toast.error("Choisissez une taille");
+              add({
+                productId: product.id,
+                slug: product.slug,
+                name: product.name,
+                image: product.image_url,
+                size,
+                priceCents: product.price_cents,
+              });
+              navigate({ to: "/panier" });
+            }}
+            className="mt-3 w-full rounded-md border border-border py-4 text-sm font-bold uppercase tracking-widest hover:bg-accent"
+          >
+            Acheter maintenant
+          </button>
+          <ul className="mt-8 space-y-1 text-xs text-muted-foreground">
+            <li>• Livraison offerte dès 80€</li>
+            <li>• Retour gratuit sous 30 jours</li>
+            <li>• Paiement sécurisé</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+src/routes/panier.tsx
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { formatPrice, useCart } from "@/lib/cart";
+import { Minus, Plus, Trash2 } from "lucide-react";
+export const Route = createFileRoute("/panier")({
+  head: () => ({ meta: [{ title: "Panier — NORDVEST" }] }),
+  component: CartPage,
+});
+function CartPage() {
+  const { items, hydrated, setQty, remove, totalCents } = useCart();
+  if (!hydrated) return <div className="mx-auto max-w-4xl px-6 py-16 text-muted-foreground">Chargement…</div>;
+  return (
+    <div className="mx-auto max-w-5xl px-6 py-12">
+      <h1 className="font-display text-5xl">Panier</h1>
+      {items.length === 0 ? (
+        <div className="mt-10 rounded-lg border border-border p-12 text-center">
+          <p className="text-muted-foreground">Votre panier est vide.</p>
+          <Link to="/" className="mt-4 inline-flex rounded-md bg-primary px-6 py-3 text-sm font-bold uppercase tracking-wider text-primary-foreground">
+            Découvrir la boutique
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-8 grid gap-8 md:grid-cols-[1fr_360px]">
+          <div className="space-y-4">
+            {items.map((i) => (
+              <div key={`${i.productId}-${i.size}`} className="flex gap-4 rounded-lg border border-border p-4">
+                <img src={i.image} alt={i.name} className="h-24 w-24 rounded-md object-cover" />
+                <div className="flex flex-1 flex-col">
+                  <div className="flex justify-between">
+                    <div>
+                      <div className="font-semibold">{i.name}</div>
+                      <div className="text-xs text-muted-foreground">Taille {i.size}</div>
+                    </div>
+                    <div className="font-semibold text-primary">{formatPrice(i.priceCents * i.quantity)}</div>
+                  </div>
+                  <div className="mt-auto flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setQty(i.productId, i.size, i.quantity - 1)} className="rounded border border-border p-1 hover:bg-accent"><Minus className="h-3 w-3"/></button>
+                      <span className="w-6 text-center text-sm">{i.quantity}</span>
+                      <button onClick={() => setQty(i.productId, i.size, i.quantity + 1)} className="rounded border border-border p-1 hover:bg-accent"><Plus className="h-3 w-3"/></button>
+                    </div>
+                    <button onClick={() => remove(i.productId, i.size)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4"/></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <aside className="rounded-lg border border-border p-6 h-fit">
+            <div className="flex justify-between text-sm">
+              <span>Sous-total</span>
+              <span>{formatPrice(totalCents)}</span>
+            </div>
+            <div className="mt-2 flex justify-between text-sm text-muted-foreground">
+              <span>Livraison</span>
+              <span>{totalCents >= 8000 ? "Gratuite" : "5,00 €"}</span>
+            </div>
+            <div className="mt-4 flex justify-between border-t border-border pt-4 text-lg font-bold">
+              <span>Total</span>
+              <span>{formatPrice(totalCents + (totalCents >= 8000 ? 0 : 500))}</span>
+            </div>
+            <Link
+              to="/checkout"
+              className="mt-6 block rounded-md bg-primary py-4 text-center text-sm font-bold uppercase tracking-widest text-primary-foreground hover:opacity-90"
+            >
+              Passer commande
+            </Link>
+            <p className="mt-3 text-center text-xs text-muted-foreground">Connexion requise pour finaliser</p>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+}
+src/routes/auth.tsx
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+export const Route = createFileRoute("/auth")({
+  head: () => ({ meta: [{ title: "Connexion — NORDVEST" }] }),
+  component: AuthPage,
+});
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { full_name: name },
+          },
+        });
+        if (error) throw error;
+        toast.success("Compte créé — vous êtes connecté");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Bienvenue");
+      }
+      navigate({ to: "/compte" });
+    } catch (err: any) {
+      toast.error(err.message ?? "Erreur");
+    } finally {
+      setLoading(false);
+    }
+  }
+  return (
+    <div className="mx-auto max-w-md px-6 py-16">
+      <h1 className="font-display text-5xl">{mode === "signin" ? "Connexion" : "Créer un compte"}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {mode === "signin" ? "Accédez à votre espace client." : "Rejoignez NORDVEST."}
+      </p>
+      <form onSubmit={submit} className="mt-8 space-y-4">
+        {mode === "signup" && (
+          <div>
+            <label className="text-xs uppercase tracking-wider">Nom complet</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className="mt-1 w-full rounded-md border border-border bg-input px-3 py-2.5 text-sm"
+            />
+          </div>
+        )}
+        <div>
+          <label className="text-xs uppercase tracking-wider">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="mt-1 w-full rounded-md border border-border bg-input px-3 py-2.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs uppercase tracking-wider">Mot de passe</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={6}
+            className="mt-1 w-full rounded-md border border-border bg-input px-3 py-2.5 text-sm"
+          />
+        </div>
+        <button
+          disabled={loading}
+          className="w-full rounded-md bg-primary py-3 text-sm font-bold uppercase tracking-widest text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {loading ? "…" : mode === "signin" ? "Se connecter" : "Créer le compte"}
+        </button>
+      </form>
+      <button
+        onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+        className="mt-6 w-full text-sm text-muted-foreground hover:text-primary"
+      >
+        {mode === "signin" ? "Pas encore de compte ? Créer un compte" : "Déjà inscrit ? Se connecter"}
+      </button>
+    </div>
+  );
+}
+src/routes/_authenticated/route.tsx
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { supabase } from "@/integrations/supabase/client";
+export const Route = createFileRoute("/_authenticated")({
+  ssr: false,
+  beforeLoad: async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) throw redirect({ to: "/auth" });
+    return { user: data.user };
+  },
+  component: () => <Outlet />,
+});
+src/routes/_authenticated/compte.tsx
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { listMyOrders } from "@/lib/orders.functions";
+import { supabase } from "@/integrations/supabase/client";
+import { formatPrice } from "@/lib/cart";
+import { toast } from "sonner";
+export const Route = createFileRoute("/_authenticated/compte")({
+  head: () => ({ meta: [{ title: "Mon compte — NORDVEST" }] }),
+  component: Account,
+});
+function Account() {
+  const { user } = Route.useRouteContext();
+  const navigate = useNavigate();
+  const fn = useServerFn(listMyOrders);
+  const { data: orders, isLoading } = useQuery({
+    queryKey: ["orders"],
+    queryFn: () => fn(),
+  });
+  async function signOut() {
+    await supabase.auth.signOut();
+    toast.success("Déconnecté");
+    navigate({ to: "/" });
+  }
+  return (
+    <div className="mx-auto max-w-4xl px-6 py-12">
+      <div className="flex items-center justify-between">
+        <h1 className="font-display text-5xl">Mon compte</h1>
+        <button onClick={signOut} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-accent">
+          Déconnexion
+        </button>
+      </div>
+      <p className="mt-2 text-muted-foreground">{user.email}</p>
+      <h2 className="mt-12 font-display text-3xl">Mes commandes</h2>
+      {isLoading ? (
+        <div className="mt-6 text-muted-foreground">Chargement…</div>
+      ) : (orders?.length ?? 0) === 0 ? (
+        <div className="mt-6 rounded-lg border border-border p-8 text-center text-muted-foreground">
+          Aucune commande pour le moment.
+        </div>
+      ) : (
+        <div className="mt-6 space-y-3">
+          {orders!.map((o) => (
+            <Link
+              key={o.id}
+              to="/commande/$id"
+              params={{ id: o.id }}
+              className="flex items-center justify-between rounded-lg border border-border p-4 hover:bg-accent"
+            >
+              <div>
+                <div className="font-mono text-xs text-muted-foreground">#{o.id.slice(0, 8)}</div>
+                <div className="mt-1 text-sm">{new Date(o.created_at).toLocaleDateString("fr-FR")}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs uppercase tracking-wider text-primary">{o.status}</div>
+                <div className="mt-1 font-semibold">{formatPrice(o.total_cents)}</div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+src/routes/_authenticated/checkout.tsx
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
+import { toast } from "sonner";
+import { formatPrice, useCart } from "@/lib/cart";
+import { placeOrder } from "@/lib/orders.functions";
+export const Route = createFileRoute("/_authenticated/checkout")({
+  head: () => ({ meta: [{ title: "Paiement — NORDVEST" }] }),
+  component: Checkout,
+});
+function Checkout() {
+  const { items, totalCents, clear, hydrated } = useCart();
+  const navigate = useNavigate();
+  const submit = useServerFn(placeOrder);
+  const [loading, setLoading] = useState(false);
+  const [form, setForm] = useState({
+    shipping_name: "",
+    shipping_address: "",
+    shipping_city: "",
+    shipping_zip: "",
+    shipping_country: "France",
+  });
+  const [card, setCard] = useState({ number: "", exp: "", cvc: "" });
+  const shipping = totalCents >= 8000 ? 0 : 500;
+  const total = totalCents + shipping;
+  async function pay(e: React.FormEvent) {
+    e.preventDefault();
+    if (items.length === 0) return toast.error("Panier vide");
+    setLoading(true);
+    try {
+      const res = await submit({
+        data: {
+          ...form,
+          items: items.map((i) => ({ productId: i.productId, size: i.size, quantity: i.quantity })),
+        },
+      });
+      clear();
+      toast.success("Paiement confirmé");
+      navigate({ to: "/commande/$id", params: { id: res.orderId } });
+    } catch (err: any) {
+      toast.error(err.message ?? "Erreur de paiement");
+    } finally {
+      setLoading(false);
+    }
+  }
+  if (!hydrated) return <div className="mx-auto max-w-4xl px-6 py-16 text-muted-foreground">Chargement…</div>;
+  if (items.length === 0) {
+    return (
+      <div className="mx-auto max-w-md px-6 py-16 text-center">
+        <p className="text-muted-foreground">Votre panier est vide.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-auto max-w-5xl px-6 py-12">
+      <h1 className="font-display text-5xl">Paiement</h1>
+      <form onSubmit={pay} className="mt-8 grid gap-8 md:grid-cols-[1fr_360px]">
+        <div className="space-y-8">
+          <section>
+            <h2 className="font-display text-2xl">Livraison</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Field label="Nom complet" value={form.shipping_name} onChange={(v)=>setForm({...form, shipping_name:v})} className="sm:col-span-2" />
+              <Field label="Adresse" value={form.shipping_address} onChange={(v)=>setForm({...form, shipping_address:v})} className="sm:col-span-2" />
+              <Field label="Ville" value={form.shipping_city} onChange={(v)=>setForm({...form, shipping_city:v})} />
+              <Field label="Code postal" value={form.shipping_zip} onChange={(v)=>setForm({...form, shipping_zip:v})} />
+              <Field label="Pays" value={form.shipping_country} onChange={(v)=>setForm({...form, shipping_country:v})} className="sm:col-span-2" />
+            </div>
+          </section>
+          <section>
+            <h2 className="font-display text-2xl">Paiement</h2>
+            <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+              Mode démonstration — aucune carte n'est débitée
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Field label="Numéro de carte" value={card.number} onChange={(v)=>setCard({...card, number:v})} placeholder="4242 4242 4242 4242" className="sm:col-span-2" />
+              <Field label="Expiration" value={card.exp} onChange={(v)=>setCard({...card, exp:v})} placeholder="MM/AA" />
+              <Field label="CVC" value={card.cvc} onChange={(v)=>setCard({...card, cvc:v})} placeholder="123" />
+            </div>
+          </section>
+        </div>
+        <aside className="h-fit rounded-lg border border-border p-6">
+          <h3 className="font-display text-xl">Récapitulatif</h3>
+          <div className="mt-4 space-y-3">
+            {items.map((i) => (
+              <div key={`${i.productId}-${i.size}`} className="flex gap-3 text-sm">
+                <img src={i.image} alt="" className="h-14 w-14 rounded object-cover" />
+                <div className="flex-1">
+                  <div className="font-medium">{i.name}</div>
+                  <div className="text-xs text-muted-foreground">Taille {i.size} · x{i.quantity}</div>
+                </div>
+                <div className="text-sm font-semibold">{formatPrice(i.priceCents * i.quantity)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 space-y-1 border-t border-border pt-4 text-sm">
+            <div className="flex justify-between"><span>Sous-total</span><span>{formatPrice(totalCents)}</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>Livraison</span><span>{shipping ? formatPrice(shipping) : "Gratuite"}</span></div>
+            <div className="mt-2 flex justify-between border-t border-border pt-2 text-base font-bold"><span>Total</span><span>{formatPrice(total)}</span></div>
+          </div>
+          <button
+            disabled={loading}
+            className="mt-6 w-full rounded-md bg-primary py-4 text-sm font-bold uppercase tracking-widest text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {loading ? "Traitement…" : `Payer ${formatPrice(total)}`}
+          </button>
+        </aside>
+      </form>
+    </div>
+  );
+}
+function Field({
+  label, value, onChange, placeholder, className = "",
+}: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; className?: string }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className="text-xs uppercase tracking-wider">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        required
+        className="mt-1 w-full rounded-md border border-border bg-input px-3 py-2.5 text-sm"
+      />
+    </label>
+  );
+}
+src/routes/_authenticated/commande.$id.tsx
+import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { CheckCircle2 } from "lucide-react";
+import { getMyOrder } from "@/lib/orders.functions";
+import { formatPrice } from "@/lib/cart";
+export const Route = createFileRoute("/_authenticated/commande/$id")({
+  head: () => ({ meta: [{ title: "Commande — NORDVEST" }] }),
+  component: OrderDetail,
+});
+function OrderDetail() {
+  const { id } = Route.useParams();
+  const fn = useServerFn(getMyOrder);
+  const { data: order, isLoading } = useQuery({
+    queryKey: ["order", id],
+    queryFn: () => fn({ data: { id } }),
+  });
+  if (isLoading) return <div className="mx-auto max-w-3xl px-6 py-16 text-muted-foreground">Chargement…</div>;
+  if (!order) throw notFound();
+  const items = (order as any).order_items as Array<{
+    id: string; product_name: string; product_image: string; size: string; quantity: number; unit_price_cents: number;
+  }>;
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-6">
+        <CheckCircle2 className="h-8 w-8 text-primary" />
+        <div>
+          <div className="font-display text-2xl">Commande confirmée</div>
+          <div className="text-sm text-muted-foreground">Référence #{order.id.slice(0, 8)}</div>
+        </div>
+      </div>
+      <h2 className="mt-10 font-display text-2xl">Articles</h2>
+      <div className="mt-4 space-y-3">
+        {items.map((it) => (
+          <div key={it.id} className="flex gap-4 rounded-lg border border-border p-4">
+            <img src={it.product_image} alt="" className="h-20 w-20 rounded object-cover" />
+            <div className="flex-1">
+              <div className="font-semibold">{it.product_name}</div>
+              <div className="text-xs text-muted-foreground">Taille {it.size} · x{it.quantity}</div>
+            </div>
+            <div className="font-semibold">{formatPrice(it.unit_price_cents * it.quantity)}</div>
+          </div>
+        ))}
+      </div>
+      <h2 className="mt-10 font-display text-2xl">Livraison</h2>
+      <div className="mt-2 rounded-lg border border-border p-4 text-sm">
+        <div>{order.shipping_name}</div>
+        <div className="text-muted-foreground">
+          {order.shipping_address}, {order.shipping_zip} {order.shipping_city}, {order.shipping_country}
+        </div>
+      </div>
+      <div className="mt-8 flex items-center justify-between rounded-lg border border-border p-6">
+        <span className="font-display text-xl">Total payé</span>
+        <span className="text-2xl font-bold text-primary">{formatPrice(order.total_cents)}</span>
+      </div>
+      <Link to="/compte" className="mt-6 inline-block text-sm text-muted-foreground hover:text-primary">
+        ← Retour à mon compte
+      </Link>
+    </div>
+  );
+}
+      cd /dev-server && bunx tsgo --noEmit 2>&1 | head -60
+      
