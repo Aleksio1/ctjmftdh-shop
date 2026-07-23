@@ -1,0 +1,16 @@
+Routes (src/routes/)
+
+__root.tsx — layout global (Header/Footer)
+index.tsx — catalogue avec filtres
+produits.$slug.tsx — fiche produit
+panier.tsx — panier
+auth.tsx — connexion / inscription
+_authenticated/checkout.tsx — paiement
+_authenticated/commande.$id.tsx — confirmation
+_authenticated/compte.tsx — historique commandes
+Logique (src/lib/)
+
+cart.ts — hook panier (localStorage)
+products.functions.ts — catalogue (server functions)
+orders.functions.ts — commandes (protégées)
+Backend : tables profiles, products, orders, order_items avec RLS, produits seedés.
